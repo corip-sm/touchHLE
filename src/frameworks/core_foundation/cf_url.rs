@@ -9,6 +9,9 @@
 //! the same type.
 
 use super::cf_allocator::{kCFAllocatorDefault, CFAllocatorRef};
+use super::cf_array::CFArrayRef;
+use super::cf_data::CFDataRef;
+use super::cf_dictionary::CFDictionaryRef;
 use super::CFIndex;
 use crate::dyld::{export_c_func, FunctionExports};
 use crate::frameworks::core_foundation::cf_string::{
@@ -20,7 +23,7 @@ use crate::frameworks::foundation::ns_string::{
 };
 use crate::frameworks::foundation::NSUInteger;
 use crate::mem::{ConstPtr, MutPtr, Ptr};
-use crate::objc::{id, msg, msg_class, release};
+use crate::objc::{id, msg, msg_class, nil, release, retain};
 use crate::Environment;
 
 pub type CFURLRef = super::CFTypeRef;
@@ -194,6 +197,42 @@ fn CFURLHasDirectoryPath(env: &mut Environment, url: CFURLRef) -> bool {
         || msg![env; last isEqual:(get_static_str(env, ".."))]
 }
 
+fn CFURLCreateDataAndPropertiesFromResource(
+    env: &mut Environment,
+    allocator: CFAllocatorRef,
+    url: CFURLRef,
+    resource_data: MutPtr<CFDataRef>,
+    properties: MutPtr<CFDictionaryRef>,
+    _desired_properties: CFArrayRef,
+    error_code: MutPtr<i32>,
+) -> bool {
+    assert!(allocator == kCFAllocatorDefault || env.mem.read(allocator).is_system_default()); // unimplemented
+
+    if !resource_data.is_null() {
+        env.mem.write(resource_data, nil);
+    }
+    if !properties.is_null() {
+        env.mem.write(properties, nil);
+    }
+    if !error_code.is_null() {
+        env.mem.write(error_code, 0);
+    }
+
+    let data: id = msg_class![env; NSData dataWithContentsOfURL:url];
+    if data == nil {
+        return false;
+    }
+
+    // CFURLCreateDataAndPropertiesFromResource follows Create semantics for
+    // the returned data object, while NSData's convenience constructor returns
+    // an autoreleased object.
+    retain(env, data);
+    if !resource_data.is_null() {
+        env.mem.write(resource_data, data);
+    }
+    true
+}
+
 pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CFURLGetFileSystemRepresentation(_, _, _, _)),
     export_c_func!(CFURLCreateFromFileSystemRepresentation(_, _, _, _)),
@@ -205,4 +244,5 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CFURLCreateCopyAppendingPathComponent(_, _, _, _)),
     export_c_func!(CFURLCreateCopyDeletingLastPathComponent(_, _)),
     export_c_func!(CFURLHasDirectoryPath(_)),
+    export_c_func!(CFURLCreateDataAndPropertiesFromResource(_, _, _, _, _, _)),
 ];

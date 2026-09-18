@@ -325,6 +325,7 @@ impl Window {
             let window = video_ctx
                 .window(title, width, height)
                 .position_centered()
+                .resizable()
                 .opengl()
                 .build()
                 .unwrap();
@@ -1362,10 +1363,9 @@ impl Window {
     pub fn viewport(&self) -> (u32, u32, u32, u32) {
         let (app_width, app_height) =
             size_for_orientation(self.device_family, self.device_orientation, self.scale_hack);
-        if !self.fullscreen && !Self::rotatable_fullscreen() {
-            return (0, 0, app_width, app_height);
-        }
-
+        // Use the actual drawable size even for windowed mode. This keeps
+        // resized windows letterboxed and centered instead of leaving the
+        // emulated screen pinned to the top-left at its original size.
         let (screen_width, screen_height) = self.window.drawable_size();
 
         let app_aspect = app_width as f32 / app_height as f32;

@@ -125,26 +125,89 @@ fn CGBitmapContextGetBytesPerRow(env: &mut Environment, context: CGContextRef) -
 }
 
 pub fn CGBitmapContextCreateImage(env: &mut Environment, context: CGContextRef) -> CGImageRef {
-    // TODO: Image::from_pixel_vec() should not exist, and this function should
-    // support any bitmap format.
     let host_obj = env.objc.borrow::<CGContextHostObject>(context);
     let CGContextSubclass::CGBitmapContext(bitmap_data) = host_obj.subclass;
-    assert!(
-        bitmap_data.bits_per_component == 8
-            && bitmap_data.bytes_per_row == bitmap_data.width * 4
-            && bitmap_data.color_space == kCGColorSpaceGenericRGB
-            && matches!(
-                bitmap_data.alpha_info,
-                kCGImageAlphaNoneSkipLast | kCGImageAlphaPremultipliedLast
-            )
-    );
-    let pixels = env
-        .mem
-        .bytes_at(
-            bitmap_data.data.cast(),
-            bitmap_data.bytes_per_row * bitmap_data.height,
-        )
-        .to_vec();
+    if bitmap_data.bits_per_component != 8 {
+        log!(
+            "CGBitmapContextCreateImage: unsupported bits per component {}",
+            bitmap_data.bits_per_component
+        );
+        return Ptr::null();
+    }
+
+    // CGBitmapContextCreateImage must also work for RGB, grayscale and
+    // first-component alpha layouts. The old implementation treated every
+    // context as tightly packed RGBA and asserted on valid 3-byte RGB
+    // contexts used by Trapped's startup UI.
+    let pixel_size = match bitmap_data.color_space {
+        kCGColorSpaceGenericRGB => components_for_rgb(bitmap_data.alpha_info),
+        kCGColorSpaceGenericGray => components_for_gray(bitmap_data.alpha_info),
+        _ => Err(()),
+    }
+    .ok()
+    .and_then(|size| usize::try_from(size).ok());
+    let Some(pixel_size) = pixel_size else {
+        log!(
+            "CGBitmapContextCreateImage: unsupported bitmap format (color space {}, alpha info {:#x})",
+            bitmap_data.color_space,
+            bitmap_data.alpha_info
+        );
+        return Ptr::null();
+    };
+    let Some(source_size) = bitmap_data.bytes_per_row.checked_mul(bitmap_data.height) else {
+        log!("CGBitmapContextCreateImage: bitmap size overflow");
+        return Ptr::null();
+    };
+    let Some(min_bytes_per_row) = bitmap_data.width.checked_mul(pixel_size as GuestUSize) else {
+        log!("CGBitmapContextCreateImage: row size overflow");
+        return Ptr::null();
+    };
+    if bitmap_data.bytes_per_row < min_bytes_per_row {
+        log!(
+            "CGBitmapContextCreateImage: bytes per row {} is smaller than required {}",
+            bitmap_data.bytes_per_row,
+            min_bytes_per_row
+        );
+        return Ptr::null();
+    }
+    let source = env.mem.bytes_at(bitmap_data.data.cast(), source_size);
+    let Some(pixel_count) = (bitmap_data.width as usize).checked_mul(bitmap_data.height as usize)
+    else {
+        log!("CGBitmapContextCreateImage: pixel count overflow");
+        return Ptr::null();
+    };
+    let Some(pixel_buffer_size) = pixel_count.checked_mul(4) else {
+        log!("CGBitmapContextCreateImage: output size overflow");
+        return Ptr::null();
+    };
+    let mut pixels = vec![0u8; pixel_buffer_size];
+    let offsets = pixel_offsets(&bitmap_data);
+    let alpha_only = bitmap_data.alpha_info == kCGImageAlphaOnly;
+    for y in 0..bitmap_data.height as usize {
+        for x in 0..bitmap_data.width as usize {
+            let source_offset = y * bitmap_data.bytes_per_row as usize + x * pixel_size;
+            let dest_offset = (y * bitmap_data.width as usize + x) * 4;
+
+            if alpha_only {
+                pixels[dest_offset] = 0xFF;
+                pixels[dest_offset + 1] = 0xFF;
+                pixels[dest_offset + 2] = 0xFF;
+            } else if bitmap_data.color_space == kCGColorSpaceGenericGray {
+                let gray = source[source_offset + offsets.0];
+                pixels[dest_offset] = gray;
+                pixels[dest_offset + 1] = gray;
+                pixels[dest_offset + 2] = gray;
+            } else {
+                pixels[dest_offset] = source[source_offset + offsets.0];
+                pixels[dest_offset + 1] = source[source_offset + offsets.1];
+                pixels[dest_offset + 2] = source[source_offset + offsets.2];
+            }
+            pixels[dest_offset + 3] = offsets
+                .3
+                .map(|alpha_offset| source[source_offset + alpha_offset])
+                .unwrap_or(0xFF);
+        }
+    }
     cg_image::from_image(
         env,
         Image::from_pixel_vec(pixels, (bitmap_data.width, bitmap_data.height)),

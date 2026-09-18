@@ -243,3 +243,6 @@ com.ea.nfshp.bv: --force-composition
 com.ea.nfshp.inc: --force-composition
 com.ea.nfshp.ipad.bv: --force-composition
 com.ea.nfshp.ipad.inc: --force-composition
+
+# Trapped: the app is landscape even though its old Info.plist omits orientation metadata.
+com.com2us.virus: --landscape-left

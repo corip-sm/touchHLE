@@ -733,6 +733,73 @@ pub const CLASSES: ClassExports = objc_classes! {
           encoding:(NSStringEncoding)encoding {
     get_bytes_buffer_inner(env, this, buffer, buffer_size, encoding, true)
 }
+- (bool)getBytes:(MutPtr<u8>)buffer
+       maxLength:(NSUInteger)max_length
+      usedLength:(MutPtr<NSUInteger>)used_length
+        encoding:(NSStringEncoding)encoding
+         options:(NSUInteger)options
+           range:(NSRange)range
+   remainingRange:(MutPtr<NSRange>)remaining_range {
+    // NSStringEncodingConversionAllowLossy is commonly passed here.  The
+    // supported encodings below already use the same representation, so no
+    // special handling is needed for the conversion options yet.
+    log_dbg!("NSString getBytes conversion options: {options:#x}");
+
+    let string_length: NSUInteger = msg![env; this length];
+    assert!(range.location <= string_length);
+    assert!(range.length <= string_length - range.location);
+    let range_location = range.location;
+    let range_length = range.length;
+    let range_end = range.location + range.length;
+
+    let substring: id = msg![env; this substringWithRange:range];
+    let bytes = to_rust_string(env, substring);
+    assert!(
+        encoding == NSUTF8StringEncoding
+            || encoding == NSASCIIStringEncoding
+            || encoding == NSMacOSRomanStringEncoding
+            || encoding == NSISOLatin1StringEncoding
+    );
+    if encoding != NSUTF8StringEncoding {
+        assert!(bytes.as_bytes().iter().all(|byte| byte.is_ascii()));
+    }
+
+    if bytes.len() > max_length as usize {
+        if !used_length.is_null() {
+            env.mem.write(used_length, 0);
+        }
+        if !remaining_range.is_null() {
+            env.mem.write(
+                remaining_range,
+                NSRange {
+                    location: range_location,
+                    length: range_length,
+                },
+            );
+        }
+        return false;
+    }
+
+    if !bytes.is_empty() {
+        assert!(!buffer.is_null());
+        env.mem
+            .bytes_at_mut(buffer, bytes.len() as NSUInteger)
+            .copy_from_slice(bytes.as_bytes());
+    }
+    if !used_length.is_null() {
+        env.mem.write(used_length, bytes.len() as NSUInteger);
+    }
+    if !remaining_range.is_null() {
+        env.mem.write(
+            remaining_range,
+            NSRange {
+                location: range_end,
+                length: 0,
+            },
+        );
+    }
+    true
+}
 - (())getCString:(MutPtr<u8>)buffer {
     let encoding: NSStringEncoding = msg_class![env; NSString defaultCStringEncoding];
 
@@ -1387,6 +1454,24 @@ pub const CLASSES: ClassExports = objc_classes! {
     this
 }
 
+- (id)initWithBytesNoCopy:(ConstPtr<u8>)guest_bytes
+                    length:(NSUInteger)len
+                  encoding:(NSStringEncoding)encoding
+             freeWhenDone:(bool)free_when_done {
+    // Copy into the host representation before optionally releasing the guest
+    // buffer.  StringHostObject does not retain guest memory.
+    let bytes = if len == 0 {
+        Vec::new()
+    } else {
+        env.mem.bytes_at(guest_bytes, len).to_vec()
+    };
+    *env.objc.borrow_mut(this) = StringHostObject::decode(Cow::Owned(bytes), encoding);
+    if free_when_done && !guest_bytes.is_null() {
+        env.mem.free(guest_bytes.cast_mut().cast());
+    }
+    this
+}
+
 - (id)initWithCharacters:(ConstPtr<unichar>)characters length:(NSUInteger)len {
     assert!(!characters.is_null());
     let num_bytes = len * 2;
@@ -1604,6 +1689,22 @@ pub const CLASSES: ClassExports = objc_classes! {
 
     *env.objc.borrow_mut(this) = host_object;
 
+    this
+}
+
+- (id)initWithBytesNoCopy:(ConstPtr<u8>)guest_bytes
+                    length:(NSUInteger)len
+                  encoding:(NSStringEncoding)encoding
+             freeWhenDone:(bool)free_when_done {
+    let bytes = if len == 0 {
+        Vec::new()
+    } else {
+        env.mem.bytes_at(guest_bytes, len).to_vec()
+    };
+    *env.objc.borrow_mut(this) = StringHostObject::decode(Cow::Owned(bytes), encoding);
+    if free_when_done && !guest_bytes.is_null() {
+        env.mem.free(guest_bytes.cast_mut().cast());
+    }
     this
 }
 

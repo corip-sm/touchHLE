@@ -106,6 +106,12 @@ pub fn CGContextRetain(env: &mut Environment, c: CGContextRef) -> CGContextRef {
     }
 }
 
+fn CGContextSetAlpha(_env: &mut Environment, _context: CGContextRef, _alpha: CGFloat) {
+    // The bitmap renderer currently applies alpha through the active fill
+    // color.  Keep this state-only API as a no-op until global alpha is
+    // modelled separately.
+}
+
 fn CGContextSetBlendMode(env: &mut Environment, context: CGContextRef, blend_mode: CGBlendMode) {
     env.objc
         .borrow_mut::<CGContextHostObject>(context)
@@ -268,7 +274,7 @@ pub fn CGContextDrawImage(
     cg_bitmap_context::draw_image(env, context, rect, image);
 }
 
-fn CGContextSaveGState(env: &mut Environment, context: CGContextRef) {
+pub fn CGContextSaveGState(env: &mut Environment, context: CGContextRef) {
     let host_obj = env.objc.borrow_mut::<CGContextHostObject>(context);
     host_obj.state_stack.push((
         host_obj.rgb_fill_color,
@@ -280,7 +286,7 @@ fn CGContextSaveGState(env: &mut Environment, context: CGContextRef) {
     CGFontRetain(env, env.objc.borrow::<CGContextHostObject>(context).font);
 }
 
-fn CGContextRestoreGState(env: &mut Environment, context: CGContextRef) {
+pub fn CGContextRestoreGState(env: &mut Environment, context: CGContextRef) {
     // We need to release _old_ font, there are 2 cases:
     // - font hasn't been set between save/restore -> this release corresponds
     // the font retain from save
@@ -431,6 +437,7 @@ fn CGContextShowGlyphsAtPositions(
 pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CGContextRetain(_)),
     export_c_func!(CGContextRelease(_)),
+    export_c_func!(CGContextSetAlpha(_, _)),
     export_c_func!(CGContextSetBlendMode(_, _)),
     export_c_func!(CGContextSetFillColorSpace(_, _)),
     export_c_func!(CGContextSetFillColorWithColor(_, _)),

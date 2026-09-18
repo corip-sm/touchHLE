@@ -17,7 +17,8 @@ use crate::frameworks::core_graphics::cg_bitmap_context::{
 use crate::frameworks::core_graphics::cg_color::{CGColorHostObject, CGColorRef};
 use crate::frameworks::core_graphics::cg_color_space::CGColorSpaceCreateDeviceRGB;
 use crate::frameworks::core_graphics::cg_context::{
-    CGContextClearRect, CGContextRef, CGContextRelease, CGContextTranslateCTM,
+    CGContextClearRect, CGContextRef, CGContextRelease, CGContextRestoreGState,
+    CGContextSaveGState, CGContextTranslateCTM,
 };
 use crate::frameworks::core_graphics::cg_image::{
     kCGImageAlphaPremultipliedLast, kCGImageByteOrder32Big,
@@ -481,11 +482,16 @@ pub const CLASSES: ClassExports = objc_classes! {
         cg_context.unwrap()
     };
 
+    // UIKit supplies a fresh graphics state for each drawLayer:inContext:
+    // call. Reusing the context without restoring its state makes app CTM
+    // changes accumulate frame-to-frame; Trapped flips its context vertically,
+    // which otherwise makes the screen alternate between normal and mirrored.
+    CGContextSaveGState(env, cg_context);
     CGContextTranslateCTM(env, cg_context, -origin.x, -origin.y);
     // TODO: move clearing to UIKit (clearsContextBeforeDrawing)?
     CGContextClearRect(env, cg_context, CGRect { origin, size });
     () = msg![env; delegate drawLayer:this inContext:cg_context];
-    CGContextTranslateCTM(env, cg_context, origin.x, origin.y);
+    CGContextRestoreGState(env, cg_context);
 }
 
 // CGImageRef*
